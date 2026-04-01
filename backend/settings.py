@@ -25,12 +25,13 @@ SECRET_KEY = 'django-insecure-j9*5oaqu^$c2p47hdkhar7&lkx&seb8coy%@0m2!ah0ls9m9n&
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']  # Izinkan semua host (untuk development)
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',  # HARUS DI PALING ATAS untuk ASGI server
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -40,6 +41,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
+    'channels',
     'api',
 ]
 
@@ -145,4 +147,16 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated', # Semua halaman wajib login
     ],
+}
+
+# --- KONFIGURASI DJANGO CHANNELS (WebSocket Real-Time) ---
+ASGI_APPLICATION = 'backend.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        # Untuk production, ganti ke Redis:
+        # 'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        # 'CONFIG': { 'hosts': [('127.0.0.1', 6379)] },
+    }
 }

@@ -7,8 +7,12 @@ from .serializers import (
     DeliveryOrderSerializer, 
     StagingItemSerializer, 
     MasterAssetSerializer,
-    MonitoringLogSerializer # Pastikan lo tambahkan ini di serializers.py nanti
+    MonitoringLogSerializer
 )
+
+# --- IMPORT UNTUK WEBSOCKET BROADCAST ---
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 # =================================================================
 # I. VIEWSET LOGISTIK & ASSETS (Kodingan Magang - JANGAN DIHAPUS)
@@ -20,20 +24,14 @@ class DeliveryOrderViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def perform_create(self, serializer):
-        # Simpan nama user yang login sebagai operator
         serializer.save(
             operator_name=self.request.user.username
         )
 
     def perform_destroy(self, instance):
-        # 1. Sebelum DO dihapus, ambil daftar Serial Number barang didalamnya
         serial_numbers = instance.items.values_list('serial_number', flat=True)
-
-        # 2. Hapus data di MasterAsset yang terkait agar database bersih
         if serial_numbers:
             MasterAsset.objects.filter(serial_number__in=serial_numbers).delete()
-
-        # 3. Hapus DO (StagingItem otomatis kehapus karena Cascade)
         instance.delete()
 
 class StagingItemViewSet(viewsets.ModelViewSet):
@@ -65,15 +63,14 @@ class RFIDTrackingView(APIView):
     """
     ENDPOINT UTAMA UNTUK RASPBERRY PI
     Jalur: /api/track/
-    Tugas: Menerima ID Tag, tentukan IN/OUT, dan update status aset.
+    Tugas: Menerima ID Tag, tentukan IN/OUT, update status aset,
+           lalu BROADCAST ke semua frontend via WebSocket.
     """
-    # Sementara allow any agar Raspberry Pi mudah nembak data saat testing, 
-    # nanti bisa lo kasih TokenAuth.
     permission_classes = [permissions.AllowAny] 
 
     def post(self, request):
         rfid_uid = request.data.get('rfid_uid')
-        antenna_port = request.data.get('antenna_port') # 1 atau 2
+        antenna_port = request.data.get('antenna_port')
 
         if not rfid_uid or not antenna_port:
             return Response(
@@ -82,34 +79,54 @@ class RFIDTrackingView(APIView):
             )
 
         try:
-            # 1. Cari Aset berdasarkan UID yang didaftarkan saat magang
+            # 1. Cari Aset berdasarkan UID
             asset = MasterAsset.objects.get(rfid_uid=rfid_uid)
             
-            # 2. Logika Antena (Sesuai kesepakatan: 1=Luar, 2=Dalam)
-            # Jika antena terakhir adalah 'Dalam' (2), berarti statusnya Masuk (IN)
-            # Jika antena terakhir adalah 'Luar' (1), berarti statusnya Keluar (OUT)
+            # 2. Logika Antena (1=Luar, 2=Dalam)
             antenna_name = "Dalam" if int(antenna_port) == 2 else "Luar"
             movement = "IN" if int(antenna_port) == 2 else "OUT"
             
             # 3. Simpan Riwayat Pergerakan
-            MonitoringLog.objects.create(
+            log = MonitoringLog.objects.create(
                 asset=asset,
                 antenna_port=antenna_port,
                 movement_type=movement
             )
             
-            # 4. Update Status di MasterAsset agar muncul di Laman Assets lo
+            # 4. Update Status di MasterAsset
             asset.last_seen = timezone.now()
             asset.is_present = (movement == "IN")
             asset.last_antenna = antenna_name
             
-            # Update lokasi fisik aset secara deskriptif
             if movement == "IN":
                 asset.asset_location = "Gama Tower - IT Area"
             else:
                 asset.asset_location = "Keluar / Di Luar Jangkauan"
                 
             asset.save()
+
+            # =========================================================
+            # 5. BROADCAST KE SEMUA FRONTEND VIA WEBSOCKET (BARU!)
+            # =========================================================
+            channel_layer = get_channel_layer()
+            ws_data = {
+                'id': log.id,
+                'asset_id': asset.asset_id,
+                'model_name': asset.model_name,
+                'category': asset.asset_type,
+                'antenna_port': int(antenna_port),
+                'antenna_display': antenna_name,
+                'movement_type': movement,
+                'rssi': None,
+                'timestamp': log.timestamp.isoformat(),
+            }
+            async_to_sync(channel_layer.group_send)(
+                'monitoring_live',
+                {
+                    'type': 'rfid_scan',   # Akan dipanggil jadi method rfid_scan() di consumer
+                    'data': ws_data,
+                }
+            )
 
             return Response({
                 "status": "Success",
