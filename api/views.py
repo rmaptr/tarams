@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.utils import timezone
+from datetime import timedelta
 from .models import DeliveryOrder, StagingItem, MasterAsset, MonitoringLog, BorrowRecord
 from .serializers import (
     DeliveryOrderSerializer, 
@@ -45,6 +46,21 @@ class MasterAssetViewSet(viewsets.ModelViewSet):
     queryset = MasterAsset.objects.all().order_by('-created_at')
     serializer_class = MasterAssetSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    @action(detail=False, methods=['get'])
+    def breaches(self, request):
+        """
+        Mengembalikan aset yang statusnya 'Available' tetapi berada di 'Luar' 
+        dan sudah melewati batas 1 jam sejak scan terakhir (is_present=False).
+        """
+        threshold = timezone.now() - timedelta(hours=1)
+        breaching_assets = MasterAsset.objects.filter(
+            status='Available',
+            is_present=False,
+            last_seen__lte=threshold
+        )
+        serializer = self.get_serializer(breaching_assets, many=True)
+        return Response(serializer.data)
 
 
 # =================================================================

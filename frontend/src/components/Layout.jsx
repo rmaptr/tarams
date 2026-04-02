@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { FaBox, FaLaptop, FaSignOutAlt, FaRss } from 'react-icons/fa';
+import GlobalAlert from './GlobalAlert';
 
 const Sidebar = () => {
     const location = useLocation();
@@ -70,7 +71,8 @@ const Sidebar = () => {
 
 const Layout = ({ children }) => {
     return (
-        <div className="flex min-h-screen bg-seabank-bg">
+        <div className="flex min-h-screen bg-seabank-bg font-sans relative">
+            <GlobalAlert />
             <Sidebar />
             <div className="ml-64 flex-1 p-8">
                 {children}
