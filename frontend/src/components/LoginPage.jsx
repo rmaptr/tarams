@@ -21,8 +21,8 @@ const LoginPage = () => {
             // Simpan token di LocalStorage (Saku Browser)
             localStorage.setItem('token', response.data.token);
 
-            // Pindah ke Dashboard
-            navigate('/warehousing');
+            // Pindah ke Dashboard Monitoring
+            navigate('/monitoring');
         } catch (err) {
             console.error("Login Error:", err);
             setError('Login Gagal. Cek username atau password.');

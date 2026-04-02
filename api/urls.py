@@ -4,8 +4,9 @@ from .views import (
     DeliveryOrderViewSet, 
     StagingItemViewSet, 
     MasterAssetViewSet,
-    MonitoringLogViewSet,  # Baru untuk Proyek Akhir
-    RFIDTrackingView      # Baru untuk Proyek Akhir (Raspberry Pi)
+    MonitoringLogViewSet,
+    BorrowRecordViewSet,
+    RFIDTrackingView
 )
 from rest_framework.authtoken.views import obtain_auth_token
 
@@ -22,6 +23,9 @@ router.register(r'assets', MasterAssetViewSet)
 # Jalur Proyek Akhir (BARU)
 # Dipakai Frontend untuk nampilin riwayat IN/OUT
 router.register(r'monitoring-logs', MonitoringLogViewSet, basename='monitoring-logs')
+
+# Jalur Hour Glass (Peminjaman Aset)
+router.register(r'borrows', BorrowRecordViewSet, basename='borrows')
 
 # =================================================================
 # DAFTAR URL PATTERNS

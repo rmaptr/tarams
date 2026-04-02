@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 
-import { FaSearch, FaFilter, FaLaptop, FaEdit, FaUserSlash, FaSave, FaTimes, FaFileExport, FaFileImport, FaRss, FaMapMarkerAlt } from 'react-icons/fa';
+import { FaSearch, FaFilter, FaLaptop, FaEdit, FaUserSlash, FaSave, FaTimes, FaFileExport, FaRss, FaMapMarkerAlt, FaHourglass, FaClock, FaUndo } from 'react-icons/fa';
 
 const Assets = () => {
     const [assetList, setAssetList] = useState([]);
@@ -10,16 +10,19 @@ const Assets = () => {
     
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('All Status');
-    const fileImportRef = useRef(null);
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingAsset, setEditingAsset] = useState(null);
+    const [activeBorrow, setActiveBorrow] = useState(null);
+
     const [formData, setFormData] = useState({
         asset_owner_name: '',
         owner_department: '',
         asset_location: '', 
         status: '',
-        rfid_tag: '' 
+        rfid_tag: '',
+        purpose: '',
+        due_hours: 24,
     });
 
     useEffect(() => {
@@ -38,10 +41,10 @@ const Assets = () => {
         }
     };
 
-    // FIX: Fungsi Tutup Modal
     const handleModalClose = () => {
         setIsModalOpen(false);
         setEditingAsset(null);
+        setActiveBorrow(null);
     };
 
     const filteredAssets = assetList.filter(asset => {
@@ -81,49 +84,118 @@ const Assets = () => {
         document.body.removeChild(link);
     };
 
-    const handleEditClick = (asset) => {
+    const handleEditClick = async (asset) => {
         setEditingAsset(asset);
-        setFormData({
+        
+        let initialForm = {
             asset_owner_name: asset.asset_owner_name === '-' ? '' : asset.asset_owner_name,
             owner_department: asset.owner_department === '-' ? '' : asset.owner_department,
             asset_location: asset.asset_location === '-' ? '' : asset.asset_location,
             status: asset.status,
-            rfid_tag: asset.rfid_tag || '' 
-        });
+            rfid_tag: asset.rfid_tag || '',
+            purpose: '',
+            due_hours: 24
+        };
+
+        // Initialize modal immediately so user doesn't wait
+        setFormData(initialForm);
         setIsModalOpen(true);
+
+        // Fetch active borrow for this asset
+        try {
+            const res = await api.get(`borrows/?status=Active`);
+            let found = res.data.find(b => b.asset === asset.id) || null;
+            
+            if (!found) {
+                const res2 = await api.get(`borrows/?status=Overdue`);
+                found = res2.data.find(b => b.asset === asset.id) || null;
+            }
+            
+            setActiveBorrow(found);
+
+            if (found) {
+                // If there's an active borrow, populate the purpose and due duration
+                const now = new Date();
+                const due = new Date(found.due_date);
+                const diffHours = Math.max(1, Math.round((due - now) / 3600000));
+                
+                setFormData(prev => ({
+                    ...prev,
+                    purpose: found.purpose || '',
+                    due_hours: diffHours
+                }));
+            }
+        } catch (e) {
+            setActiveBorrow(null);
+        }
     };
 
     const handleSaveAssignment = async () => {
         try {
-            // Kita pastikan kalau lokasi kosong, kita kirim '-' biar database gak marah
+            if (formData.status === 'Assigned' && (!formData.asset_owner_name || !formData.owner_department)) {
+                alert("Owner Name dan Department wajib diisi apabila status Assigned!");
+                return;
+            }
+
+            // 1. Manage Borrow Record FIRST
+            // BorrowRecordSerializer requires the asset to be 'Available'. 
+            // If we patch the asset to 'Assigned' first, it will throw a validation error.
+            if (formData.status === 'Assigned') {
+                const dueDate = new Date();
+                dueDate.setHours(dueDate.getHours() + parseInt(formData.due_hours || 24));
+                
+                const borrowData = {
+                    asset: editingAsset.asset_id,
+                    borrower_name: formData.asset_owner_name,
+                    borrower_department: formData.owner_department,
+                    purpose: formData.purpose,
+                    due_date: dueDate.toISOString(),
+                };
+
+                if (!activeBorrow) {
+                    await api.post('borrows/', borrowData);
+                } else {
+                    await api.patch(`borrows/${activeBorrow.id}/`, borrowData);
+                }
+            } else if ((formData.status === 'Available' || formData.status === 'Faulty') && activeBorrow) {
+                // Close the borrow record if status explicitly changed from Assigned
+                await api.post(`borrows/${activeBorrow.id}/return_asset/`);
+            }
+
+            // 2. PATCH Asset Data with remaining fields like location and RFID
             const submissionData = {
-                ...formData,
-                asset_location: formData.asset_location.trim() === '' ? '-' : formData.asset_location
+                asset_owner_name: formData.status === 'Assigned' ? formData.asset_owner_name : '-',
+                owner_department: formData.status === 'Assigned' ? formData.owner_department : '-',
+                asset_location: formData.asset_location.trim() === '' ? '-' : formData.asset_location,
+                status: formData.status,
+                rfid_tag: formData.rfid_tag
             };
 
-            const response = await api.patch(`assets/${editingAsset.id}/`, submissionData);
-            if (response.status === 200) {
-                alert("Aset Berhasil Diupdate!");
-                handleModalClose();
-                fetchAssets();
-            }
+            await api.patch(`assets/${editingAsset.id}/`, submissionData);
+            
+            alert("Aset Berhasil Diupdate dan direkam!");
+            handleModalClose();
+            fetchAssets();
         } catch (error) {
             console.error("Update Error Detail:", error.response?.data);
             const detail = error.response?.data ? JSON.stringify(error.response.data) : "Network Error";
-            alert("Gagal update data ke database: " + detail);
+            alert("Gagal update data: " + detail);
         }
     };
 
     const handleUnassign = async () => {
-        if (!confirm("Unassign aset ini?")) return;
+        if (!confirm("Unassign aset ini? Aset akan dikembalikan (Available) dan record peminjaman ditutup.")) return;
         try {
             await api.patch(`assets/${editingAsset.id}/`, {
                 asset_owner_name: '-', owner_department: '-', asset_location: '-', status: 'Available',
                 rfid_tag: editingAsset.rfid_tag 
             });
+            if (activeBorrow) {
+                 await api.post(`borrows/${activeBorrow.id}/return_asset/`);
+            }
             handleModalClose();
             fetchAssets();
-        } catch (error) { alert("Gagal."); }
+        } catch (error) { alert("Gagal unassign aset."); }
     };
 
     const getStatusBadge = (status) => {
@@ -230,67 +302,139 @@ const Assets = () => {
                 </table>
             </div>
 
-            {/* --- MODAL EDIT --- */}
+            {/* ========================================== */}
+            {/* MODAL: UNIFIED ASSET EDITOR */}
+            {/* ========================================== */}
             {isModalOpen && editingAsset && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-7 animate-in fade-in zoom-in duration-200">
-                        <div className="flex justify-between items-center mb-6 border-b pb-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+                        {/* Modal Header */}
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                             <div>
-                                <h3 className="text-xl font-bold text-gray-800">Edit Asset Status</h3>
-                                <p className="text-xs text-gray-400 mt-1 uppercase tracking-widest">{editingAsset.asset_id} | {editingAsset.model_name}</p>
+                                <h3 className="text-lg font-bold text-gray-800">{editingAsset.asset_id}</h3>
+                                <p className="text-xs text-gray-400 mt-0.5">{editingAsset.model_name} | {editingAsset.serial_number}</p>
                             </div>
-                            <button onClick={handleModalClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition"><FaTimes /></button>
+                            <button onClick={handleModalClose} className="p-2 hover:bg-gray-200 rounded-full text-gray-400 transition"><FaTimes /></button>
                         </div>
 
-                        <div className="space-y-5">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Change Status</label>
-                                <select value={formData.status} onChange={(e) => setFormData({...formData, status: e.target.value})} className="w-full border border-gray-300 rounded-lg p-3 text-sm bg-gray-50 focus:ring-2 focus:ring-seabank-blue outline-none font-semibold text-gray-700">
-                                    <option value="Available">Available</option>
-                                    <option value="Assigned">Assigned</option>
-                                    <option value="Faulty">Faulty</option>
-                                </select>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
+                        <div className="p-6 overflow-y-auto custom-scrollbar">
+                            <div className="space-y-6">
+                                {/* STATUS */}
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Owner Name</label>
-                                    <input value={formData.asset_owner_name} onChange={(e) => setFormData({...formData, asset_owner_name: e.target.value})} className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="-" />
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Change Status</label>
+                                    <div className="relative">
+                                        <select 
+                                            value={formData.status} 
+                                            onChange={(e) => setFormData({...formData, status: e.target.value})} 
+                                            className="w-full border border-gray-300 rounded-lg py-3 px-4 text-sm bg-white focus:ring-2 focus:ring-seabank-blue outline-none font-bold text-gray-700 shadow-sm appearance-none"
+                                        >
+                                            <option value="Available">🟢 Available</option>
+                                            <option value="Assigned">🔵 Assigned</option>
+                                            <option value="Faulty">🔴 Faulty</option>
+                                        </select>
+                                    </div>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Department</label>
-                                    <input value={formData.owner_department} onChange={(e) => setFormData({...formData, owner_department: e.target.value})} className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="-" />
-                                </div>
-                            </div>
-                            
-                            {/* --- INI KOLOM BARU YANG LO MINTA --- */}
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2 flex items-center gap-1">
-                                    <FaMapMarkerAlt className="text-seabank-blue" /> Physical Location
-                                </label>
-                                <input 
-                                    value={formData.asset_location} 
-                                    onChange={(e) => setFormData({...formData, asset_location: e.target.value})} 
-                                    className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-seabank-blue outline-none" 
-                                    placeholder="Contoh: Gama Tower Lt. 35 Seat 12" 
-                                />
-                            </div>
 
-                            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
-                                <label className="block text-[10px] font-bold text-blue-400 uppercase mb-1">Registered RFID UID</label>
-                                <p className="text-sm font-mono font-bold text-blue-700">{formData.rfid_tag || 'No RFID Tag'}</p>
+                                {/* CONDITIONAL HOUR GLASS SECTION IF ASSIGNED */}
+                                {formData.status === 'Assigned' ? (
+                                    <div className="bg-orange-50/50 border border-orange-100 rounded-xl p-5 space-y-4 shadow-sm animate-fade-in">
+                                        <h4 className="text-[11px] font-black text-seabank-orange uppercase flex items-center gap-1.5 mb-2">
+                                            <FaUserSlash className="text-orange-400" /> Ownership & Borrow Fields
+                                        </h4>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Borrower Name</label>
+                                                <input value={formData.asset_owner_name} onChange={(e) => setFormData({...formData, asset_owner_name: e.target.value})} className="w-full border border-orange-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-orange-300 outline-none bg-white font-medium" placeholder="Nama..." />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Department</label>
+                                                <input value={formData.owner_department} onChange={(e) => setFormData({...formData, owner_department: e.target.value})} className="w-full border border-orange-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-orange-300 outline-none bg-white font-medium" placeholder="Dept..." />
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Purpose / Notes (Optional)</label>
+                                            <textarea 
+                                                rows="2" 
+                                                value={formData.purpose} 
+                                                onChange={(e) => setFormData({...formData, purpose: e.target.value})} 
+                                                className="w-full border border-orange-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-300 outline-none bg-white resize-none" 
+                                                placeholder="Contoh: Peminjaman laptop untuk presentasi..." 
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center gap-4 bg-white p-3 rounded-lg border border-orange-100 shadow-sm">
+                                            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-orange-100 text-seabank-orange shrink-0">
+                                                <FaClock />
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1 w-full flex justify-between">
+                                                    <span>Lending Period</span>
+                                                    <span className="text-orange-500">
+                                                        Due: {(() => { const d = new Date(); d.setHours(d.getHours() + parseInt(formData.due_hours || 0)); return d.toLocaleString('id-ID', { day: 'numeric', month: 'short', hour:'2-digit', minute:'2-digit' }); })()}
+                                                    </span>
+                                                </label>
+                                                <div className="flex items-center gap-2">
+                                                    <input 
+                                                        type="number" min="1" 
+                                                        value={formData.due_hours} 
+                                                        onChange={(e) => setFormData({...formData, due_hours: e.target.value})} 
+                                                        className="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm font-bold text-center focus:outline-none focus:border-seabank-orange" 
+                                                    />
+                                                    <span className="text-xs font-bold text-gray-500">JAM</span>
+                                                    <span className="text-[10px] text-gray-400 ml-2 italic text-right">(Default: 24 Jam)</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Previous Owner</label>
+                                            <input value={formData.asset_owner_name} disabled className="w-full border border-gray-200 rounded-lg p-3 text-sm bg-gray-50 text-gray-400 cursor-not-allowed" placeholder="-" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Department</label>
+                                            <input value={formData.owner_department} disabled className="w-full border border-gray-200 rounded-lg p-3 text-sm bg-gray-50 text-gray-400 cursor-not-allowed" placeholder="-" />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2 flex items-center gap-1">
+                                        <FaMapMarkerAlt className="text-seabank-blue" /> Physical Location
+                                    </label>
+                                    <input 
+                                        value={formData.asset_location} 
+                                        onChange={(e) => setFormData({...formData, asset_location: e.target.value})} 
+                                        className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-seabank-blue outline-none shadow-sm" 
+                                        placeholder="Contoh: Gama Tower Lt. 35 Seat 12" 
+                                    />
+                                </div>
+
+                                <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-center justify-between">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-blue-400 uppercase mb-0.5">Registered RFID UID</label>
+                                        <p className="text-sm font-mono font-bold text-blue-700">{formData.rfid_tag || 'No RFID Tag Linked'}</p>
+                                    </div>
+                                    <FaRss className="text-2xl text-blue-200 opacity-50" />
+                                </div>
                             </div>
                         </div>
 
-                        <div className="flex justify-end gap-3 mt-10 pt-5 border-t">
-                            {editingAsset.status === 'Assigned' && (
-                                <button onClick={handleUnassign} className="px-5 py-2.5 border border-red-200 text-red-600 hover:bg-red-50 rounded-lg text-sm font-bold flex items-center gap-2 mr-auto transition">
-                                    <FaUserSlash /> Unassign
+                        <div className="p-5 border-t border-gray-100 bg-gray-50 shrink-0 flex items-center justify-between">
+                            {editingAsset.status === 'Assigned' ? (
+                                <button onClick={handleUnassign} className="px-5 py-2.5 border border-red-200 text-red-600 bg-white hover:bg-red-50 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm transition">
+                                    <FaUndo /> Unassign & Return
                                 </button>
-                            )}
-                            <button onClick={handleModalClose} className="px-5 py-2.5 text-gray-500 font-bold text-sm hover:bg-gray-100 rounded-lg transition">Cancel</button>
-                            <button onClick={handleSaveAssignment} className="px-6 py-2.5 bg-seabank-blue text-white rounded-lg text-sm font-bold hover:bg-blue-800 flex items-center gap-2 shadow-lg shadow-blue-200 transition">
-                                <FaSave /> Save Changes
-                            </button>
+                            ) : <div></div>}
+                            
+                            <div className="flex gap-3">
+                                <button onClick={handleModalClose} className="px-5 py-2.5 text-gray-500 font-bold text-sm bg-white border border-gray-200 hover:bg-gray-100 rounded-lg transition shadow-sm">Cancel</button>
+                                <button onClick={handleSaveAssignment} className="px-6 py-2.5 bg-seabank-blue text-white rounded-lg text-sm font-bold hover:bg-blue-800 flex items-center gap-2 shadow-md hover:shadow-lg transition">
+                                    <FaSave /> Save Changes
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

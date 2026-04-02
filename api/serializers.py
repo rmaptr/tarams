@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import DeliveryOrder, StagingItem, MasterAsset, MonitoringLog
+from .models import DeliveryOrder, StagingItem, MasterAsset, MonitoringLog, BorrowRecord
 from rest_framework.validators import UniqueValidator
 import datetime
 import random
@@ -26,6 +26,67 @@ class MonitoringLogSerializer(serializers.ModelSerializer):
             'antenna_port', 'antenna_display', 
             'movement_type', 'rssi', 'timestamp'
         ]
+
+
+# =================================================================
+# I-B. BORROW RECORD SERIALIZER (Hour Glass Feature)
+# =================================================================
+
+class BorrowRecordSerializer(serializers.ModelSerializer):
+    # Relasi explicitly lookup via asset_id (karena frontend mengirim string AST-xxxx)
+    asset = serializers.SlugRelatedField(
+        slug_field='asset_id',
+        queryset=MasterAsset.objects.all()
+    )
+    
+    # Read-only fields dari relasi MasterAsset
+    asset_id_display = serializers.ReadOnlyField(source='asset.asset_id')
+    model_name = serializers.ReadOnlyField(source='asset.model_name')
+    asset_type = serializers.ReadOnlyField(source='asset.asset_type')
+    serial_number = serializers.ReadOnlyField(source='asset.serial_number')
+
+    # Computed: sisa waktu dalam detik (negatif = overdue)
+    time_remaining = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BorrowRecord
+        fields = [
+            'id', 'asset', 'asset_id_display', 'model_name', 'asset_type',
+            'serial_number', 'borrower_name', 'borrower_department',
+            'purpose', 'borrowed_at', 'due_date', 'returned_at',
+            'status', 'created_by', 'time_remaining'
+        ]
+        read_only_fields = ['status', 'returned_at', 'created_by', 'borrowed_at']
+
+    def get_time_remaining(self, obj):
+        if obj.returned_at:
+            return 0
+        from django.utils import timezone
+        delta = obj.due_date - timezone.now()
+        return int(delta.total_seconds())
+
+    def validate_asset(self, value):
+        # Hanya aset Available yang bisa dipinjam
+        if value.status != 'Available':
+            raise serializers.ValidationError(
+                f"Aset {value.asset_id} statusnya '{value.status}', hanya aset 'Available' yang bisa dipinjam."
+            )
+        # Cek tidak ada peminjaman aktif
+        if BorrowRecord.objects.filter(asset=value, status='Active').exists():
+            raise serializers.ValidationError(
+                f"Aset {value.asset_id} sedang dipinjam oleh orang lain."
+            )
+        return value
+
+    def create(self, validated_data):
+        record = super().create(validated_data)
+        # Update status aset ke Assigned
+        asset = record.asset
+        asset.status = 'Assigned'
+        asset.asset_owner_name = record.borrower_name
+        asset.owner_department = record.borrower_department
+        asset.save()
+        return record
 
 # =================================================================
 # II. ASSET SERIALIZER (Kodingan Magang + Monitoring Fields)

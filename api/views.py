@@ -1,13 +1,15 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.decorators import action
 from django.utils import timezone
-from .models import DeliveryOrder, StagingItem, MasterAsset, MonitoringLog
+from .models import DeliveryOrder, StagingItem, MasterAsset, MonitoringLog, BorrowRecord
 from .serializers import (
     DeliveryOrderSerializer, 
     StagingItemSerializer, 
     MasterAssetSerializer,
-    MonitoringLogSerializer
+    MonitoringLogSerializer,
+    BorrowRecordSerializer
 )
 
 # --- IMPORT UNTUK WEBSOCKET BROADCAST ---
@@ -59,6 +61,74 @@ class MonitoringLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
 
+# =================================================================
+# III. VIEWSET HOUR GLASS (Peminjaman Aset)
+# =================================================================
+
+class BorrowRecordViewSet(viewsets.ModelViewSet):
+    """
+    CRUD untuk BorrowRecord.
+    POST   /api/borrows/          → Pinjam aset (status jadi Assigned)
+    GET    /api/borrows/          → List semua peminjaman
+    POST   /api/borrows/{id}/return_asset/ → Kembalikan aset
+    DELETE /api/borrows/{id}/      → Batalkan peminjaman
+    """
+    queryset = BorrowRecord.objects.all()
+    serializer_class = BorrowRecordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = BorrowRecord.objects.select_related('asset').all()
+        # Auto-update status Overdue untuk yang lewat jatuh tempo
+        now = timezone.now()
+        qs.filter(status='Active', due_date__lt=now).update(status='Overdue')
+        
+        # Filter optional: ?status=Active / ?status=Returned
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user.username)
+
+    def perform_destroy(self, instance):
+        # Kalau dihapus/dibatalkan, kembalikan status aset
+        if instance.status in ('Active', 'Overdue'):
+            asset = instance.asset
+            asset.status = 'Available'
+            asset.asset_owner_name = '-'
+            asset.owner_department = '-'
+            asset.save()
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def return_asset(self, request, pk=None):
+        """
+        POST /api/borrows/{id}/return_asset/
+        Tandai aset sudah dikembalikan.
+        """
+        record = self.get_object()
+        if record.returned_at:
+            return Response(
+                {"error": "Aset ini sudah dikembalikan sebelumnya."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        record.returned_at = timezone.now()
+        record.status = 'Returned'
+        record.save()
+
+        # Reset status aset
+        asset = record.asset
+        asset.status = 'Available'
+        asset.asset_owner_name = '-'
+        asset.owner_department = '-'
+        asset.save()
+
+        return Response(BorrowRecordSerializer(record).data)
+
+
 class RFIDTrackingView(APIView):
     """
     ENDPOINT UTAMA UNTUK RASPBERRY PI
@@ -104,6 +174,23 @@ class RFIDTrackingView(APIView):
                 asset.asset_location = "Keluar / Di Luar Jangkauan"
                 
             asset.save()
+
+            # =========================================================
+            # 5. AUTO-RETURN: Cek apakah aset punya peminjaman aktif
+            # =========================================================
+            if movement == 'IN':
+                active_borrow = BorrowRecord.objects.filter(
+                    asset=asset, status__in=['Active', 'Overdue']
+                ).first()
+                if active_borrow:
+                    active_borrow.returned_at = timezone.now()
+                    active_borrow.status = 'Returned'
+                    active_borrow.save()
+                    # Reset status aset ke Available
+                    asset.status = 'Available'
+                    asset.asset_owner_name = '-'
+                    asset.owner_department = '-'
+                    asset.save()
 
             # =========================================================
             # 5. BROADCAST KE SEMUA FRONTEND VIA WEBSOCKET (BARU!)

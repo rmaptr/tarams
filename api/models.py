@@ -158,3 +158,47 @@ class StagingItem(models.Model):
 
     def __str__(self):
         return f"Item: {self.model_name} (DO: {self.delivery_order.do_number})"
+
+
+# =================================================================
+# V. MODEL PEMINJAMAN ASET (Hour Glass Feature)
+# =================================================================
+
+class BorrowRecord(models.Model):
+    """
+    Mencatat peminjaman aset IT.
+    Hour Glass menampilkan countdown menuju due_date.
+    Otomatis ditutup saat aset di-scan IN oleh Raspberry Pi.
+    """
+    STATUS_CHOICES = [
+        ('Active', 'Sedang Dipinjam'),
+        ('Returned', 'Sudah Dikembalikan'),
+        ('Overdue', 'Lewat Jatuh Tempo'),
+    ]
+
+    asset = models.ForeignKey(
+        MasterAsset,
+        on_delete=models.CASCADE,
+        related_name='borrows'
+    )
+
+    borrower_name = models.CharField(max_length=255)
+    borrower_department = models.CharField(max_length=255)
+    purpose = models.TextField(blank=True, null=True)
+
+    borrowed_at = models.DateTimeField(auto_now_add=True)
+    due_date = models.DateTimeField()
+    returned_at = models.DateTimeField(null=True, blank=True)
+
+    status = models.CharField(
+        choices=STATUS_CHOICES,
+        default='Active',
+        max_length=20
+    )
+    created_by = models.CharField(max_length=100, blank=True, null=True)
+
+    class Meta:
+        ordering = ['-borrowed_at']
+
+    def __str__(self):
+        return f"Borrow: {self.asset.asset_id} → {self.borrower_name} (Due: {self.due_date})"

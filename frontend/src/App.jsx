@@ -10,7 +10,7 @@ import Warehousing from './components/Warehousing';
 import AddHardware from './components/AddHardware';
 import EditHardware from './components/EditHardware';
 import Assets from './components/Assets';
-import Monitoring from './components/Monitoring'; // <--- IMPORT HALAMAN BARU UNTUK PROYEK AKHIR
+import Monitoring from './components/Monitoring';
 
 // --- KOMPONEN SATPAM (PROTECTED ROUTE) ---
 // Tugas: Mengecek apakah user punya "Tiket" (Token) di saku browsernya.

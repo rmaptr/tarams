@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { FaBox, FaLaptop, FaSignOutAlt, FaRss } from 'react-icons/fa'; // Ditambahkan FaRss
+import { FaBox, FaLaptop, FaSignOutAlt, FaRss } from 'react-icons/fa';
 
 const Sidebar = () => {
     const location = useLocation();
@@ -42,16 +42,16 @@ const Sidebar = () => {
 
             {/* Menu Items */}
             <nav className="flex-1 mt-6 pr-4">
+                {/* --- MENU BARU UNTUK PROYEK AKHIR --- */}
+                <Link to="/monitoring" className={getLinkClass('/monitoring')}>
+                    <FaRss /> Live Monitoring
+                </Link>
+                
                 <Link to="/warehousing" className={getLinkClass('/warehousing')}>
                     <FaBox /> Warehousing
                 </Link>
                 <Link to="/assets" className={getLinkClass('/assets')}>
                     <FaLaptop /> Assets
-                </Link>
-                
-                {/* --- MENU BARU UNTUK PROYEK AKHIR --- */}
-                <Link to="/monitoring" className={getLinkClass('/monitoring')}>
-                    <FaRss /> Live Monitoring
                 </Link>
             </nav>
 
