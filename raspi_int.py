@@ -32,7 +32,7 @@ import RPi.GPIO as GPIO
 PORT = '/dev/ttyACM0'
 BAUD = 38400
 
-BACKEND_URL = "http://192.168.153.122:8000/api/track/"
+BACKEND_URL = "http://192.168.246.123:8000/api/track/"
 
 # RF Power: 00~1B hex (-2 to 25 dBm)
 RF_POWER_HEX = "19"  # 23 dBm
